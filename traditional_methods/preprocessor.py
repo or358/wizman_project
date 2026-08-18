@@ -1,6 +1,7 @@
 import re
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.model_selection import train_test_split
+import config
 
 def clean_text(text):
     """
@@ -18,13 +19,16 @@ def preprocess_and_split(df):
     df['text'] = df['text'].apply(clean_text)
     
     print("2. Vectorizing text using TF-IDF...")
-    vectorizer = TfidfVectorizer(max_features=5000)
+    vectorizer = TfidfVectorizer(max_features=config.MAX_FEATURES)
     X = vectorizer.fit_transform(df['text'])
     y = df['label']
     
     print("3. Splitting data into Train and Test sets...")
     X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=0.2, random_state=42, stratify=y
+        X, y, 
+        test_size=config.TEST_SIZE, 
+        random_state=config.RANDOM_STATE, 
+        stratify=y
     )
     
     print(f"Done! Training set size: {X_train.shape[0]}, Test set size: {X_test.shape[0]}")
