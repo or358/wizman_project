@@ -1,4 +1,4 @@
-
+# deep_learning_methods/preprocessor.py
 
 import re
 from typing import List
@@ -22,8 +22,6 @@ class TextPreprocessor:
         text = text.lower()
         
         # Separate punctuation signs from text using regex
-        # The regex captures any character that is not a word character (\w) or whitespace (\s)
-        # and adds a space before and after it.
         text = re.sub(r'([^\w\s])', r' \1 ', text)
         
         # Remove multiple consecutive spaces that might have been created
@@ -36,7 +34,6 @@ class TextPreprocessor:
         Splits the normalized text into a list of words (tokens).
         """
         normalized_text = self.normalize_text(text)
-        # Split by space to get individual words/punctuation
         return normalized_text.split()
 
     def process_corpus(self, corpus: List[str]) -> List[List[str]]:

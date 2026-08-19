@@ -15,7 +15,24 @@ class Word2VecConfig:
 
 class ModelConfig:
     """
-    General configuration for the deep learning models (CNN/LSTM).
+    General configuration for the deep learning models and data padding.
     """
-    UNK_TOKEN = "<UNK>"    # Token used for missing or rare words
-    PAD_TOKEN = "<PAD>"    # Token used for padding sequences to the same length
+    UNK_TOKEN = "<UNK>"    
+    PAD_TOKEN = "<PAD>"    
+    MAX_SEQ_LENGTH = 200   # Maximum number of words in a review (pad/truncate to this)
+    BATCH_SIZE = 32        # Number of samples passed to the network at once
+    LEARNING_RATE = 0.001
+    NUM_CLASSES = 2        # Positive (1) or Negative (0) review
+
+class CNNConfig:
+    """Configuration specific to the CNN model."""
+    NUM_FILTERS = 100            # Number of filters per window size
+    FILTER_SIZES = [3, 4, 5]     # Window sizes (like 3-grams, 4-grams, 5-grams)
+    DROPOUT = 0.5
+
+class LSTMConfig:
+    """Configuration specific to the LSTM model."""
+    HIDDEN_DIM = 256             # Number of hidden units in the LSTM
+    NUM_LAYERS = 2               # Number of stacked LSTM layers
+    BIDIRECTIONAL = True         # Should the LSTM read text forwards and backwards?
+    DROPOUT = 0.5
