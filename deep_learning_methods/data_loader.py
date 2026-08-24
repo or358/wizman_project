@@ -1,4 +1,4 @@
-# deep_learning_methods/data_loader.py
+
 
 import torch
 from datasets import load_dataset
@@ -16,7 +16,7 @@ class TextDataLoader:
         
     def load_classification_datasets(self):
         """
-        Loads the datasets and controls the exact size to reach ~60 Million words.
+        Loads the datasets and controls the exact size to reach ~40 Million words.
         """
         print("Loading IMDb dataset...")
         self.datasets['imdb'] = load_dataset("stanfordnlp/imdb")
