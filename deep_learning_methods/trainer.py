@@ -1,178 +1,180 @@
-# deep_learning_methods/main.py
+# deep_learning_methods/trainer.py
 
 import os
+import time
 import torch
 import torch.nn as nn
-from torch.utils.data import DataLoader
-from datasets import load_dataset
-from gensim.models import Word2Vec
-import torchtext.vocab as vocab_lib
+import pandas as pd
+import matplotlib.pyplot as plt
 
-from config import ModelConfig, Word2VecConfig
-from preprocessor import TextPreprocessor
-from data_loader import Vocabulary, TextDataset
-from models import TextCNN, TextLSTM
-from trainer import ModelTrainer
-from transformer_main import train_transformer  # Importing the transformer runner
-
-def load_pretrained_glove(vocab: Vocabulary):
-    """
-    Loads pretrained GloVe embeddings for the words in our vocabulary.
-    Returns an embedding matrix matching our vocabulary size.
-    """
-    print("\nDownloading/Loading GloVe pretrained vectors (this might take a minute the first time)...")
-    # Using GloVe 6B tokens, 300 dimensions as a standard pretrained model
-    glove = vocab_lib.GloVe(name='6B', dim=300)
-    
-    embedding_matrix = torch.zeros((vocab.vocab_size, 300))
-    nn.init.uniform_(embedding_matrix, -0.1, 0.1)
-    embedding_matrix[vocab.word2idx[ModelConfig.PAD_TOKEN]] = torch.zeros(300)
-    
-    words_found = 0
-    for word, idx in vocab.word2idx.items():
-        if word in glove.stoi:
-            embedding_matrix[idx] = glove.vectors[glove.stoi[word]]
-            words_found += 1
-            
-    print(f"Loaded {words_found}/{vocab.vocab_size} pretrained GloVe vectors.")
-    return embedding_matrix, 300
-
-def create_our_w2v_matrix(vocab: Vocabulary, w2v_path: str = "../data/my_word2vec.model"):
-    """
-    Loads our custom trained Word2Vec model.
-    """
-    if not os.path.exists(w2v_path):
-        raise FileNotFoundError(f"Cannot find Word2Vec model at {w2v_path}. Did you run train_word2vec.py?")
+class ModelTrainer:
+    def __init__(self, model, train_loader, val_loader, test_loader, learning_rate, device, experiment_name):
+        self.model = model.to(device)
+        self.train_loader = train_loader
+        self.val_loader = val_loader
+        self.test_loader = test_loader
+        self.device = device
+        self.experiment_name = experiment_name
         
-    print(f"\nLoading custom trained Word2Vec model from {w2v_path}...")
-    w2v_model = Word2Vec.load(w2v_path)
-    
-    embedding_matrix = torch.zeros((vocab.vocab_size, Word2VecConfig.VECTOR_SIZE))
-    nn.init.uniform_(embedding_matrix, -0.1, 0.1)
-    embedding_matrix[vocab.word2idx[ModelConfig.PAD_TOKEN]] = torch.zeros(Word2VecConfig.VECTOR_SIZE)
-    
-    words_found = 0
-    for word, idx in vocab.word2idx.items():
-        if word in w2v_model.wv:
-            # .copy() is needed to safely convert from NumPy array to PyTorch tensor
-            embedding_matrix[idx] = torch.tensor(w2v_model.wv[word].copy())
-            words_found += 1
-            
-    print(f"Loaded {words_found}/{vocab.vocab_size} vectors from custom Word2Vec.")
-    return embedding_matrix, Word2VecConfig.VECTOR_SIZE
-
-def prepare_data_for_dataset(dataset_name: str, preprocessor: TextPreprocessor):
-    """Loads dataset, builds vocabulary, and returns DataLoaders."""
-    print(f"\nLoading dataset: {dataset_name.upper()}...")
-    
-    if dataset_name == 'rotten_tomatoes':
-        dataset = load_dataset("cornell-movie-review-data/rotten_tomatoes")
-        train_texts, train_labels = dataset['train']['text'], dataset['train']['label']
-        val_texts, val_labels = dataset['validation']['text'], dataset['validation']['label']
-        test_texts, test_labels = dataset['test']['text'], dataset['test']['label']
+        self.criterion = nn.CrossEntropyLoss()
+        self.optimizer = torch.optim.Adam(self.model.parameters(), lr=learning_rate)
         
-    elif dataset_name == 'imdb':
-        dataset = load_dataset("stanfordnlp/imdb")
-        full_train = dataset['train'].train_test_split(test_size=0.2, seed=42)
-        train_texts, train_labels = full_train['train']['text'], full_train['train']['label']
-        val_texts, val_labels = full_train['test']['text'], full_train['test']['label']
-        test_texts, test_labels = dataset['test']['text'], dataset['test']['label']
-    
-    print("Tokenizing training set to build vocabulary...")
-    tokenized_train = [preprocessor.tokenize(text) for text in train_texts]
-    vocab = Vocabulary()
-    vocab.build_vocab(tokenized_train, min_count=2)
-    print(f"Vocabulary size created: {vocab.vocab_size}")
-    
-    train_dataset = TextDataset(train_texts, train_labels, vocab, preprocessor)
-    val_dataset = TextDataset(val_texts, val_labels, vocab, preprocessor)
-    test_dataset = TextDataset(test_texts, test_labels, vocab, preprocessor)
-    
-    train_loader = DataLoader(train_dataset, batch_size=ModelConfig.BATCH_SIZE, shuffle=True)
-    val_loader = DataLoader(val_dataset, batch_size=ModelConfig.BATCH_SIZE, shuffle=False)
-    test_loader = DataLoader(test_dataset, batch_size=ModelConfig.BATCH_SIZE, shuffle=False)
-    
-    return vocab, train_loader, val_loader, test_loader
-
-def run_all_experiments():
-    """Runs all 24 classical combinations + 2 Transformer experiments automatically."""
-    datasets = ['rotten_tomatoes', 'imdb']
-    models = ['CNN', 'LSTM']
-    embeddings = ['Random', 'GloVe', 'Word2Vec']
-    freezing_options = [True, False]
-    
-    device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    print(f"Starting fully automated run on device: {device}")
-    
-    preprocessor = TextPreprocessor()
-    
-    total_classical_exp = len(datasets) * len(models) * len(embeddings) * len(freezing_options)
-    current_exp = 1
-
-    # --- PART 1: CNN & LSTM EXPERIMENTS ---
-    for dataset_name in datasets:
-        vocab, train_loader, val_loader, test_loader = prepare_data_for_dataset(dataset_name, preprocessor)
+        self.epoch_data = []
         
-        for emb_choice in embeddings:
-            embedding_matrix = None
-            embedding_dim = Word2VecConfig.VECTOR_SIZE
+    def calculate_accuracy(self, outputs, labels):
+        _, preds = torch.max(outputs, 1)
+        corrects = torch.sum(preds == labels).item()
+        return corrects / len(labels)
+        
+    def run_epoch(self, dataloader, is_train=True):
+        if is_train:
+            self.model.train()
+        else:
+            self.model.eval()
             
-            if emb_choice == 'GloVe':
-                embedding_matrix, embedding_dim = load_pretrained_glove(vocab)
-            elif emb_choice == 'Word2Vec':
-                embedding_matrix, embedding_dim = create_our_w2v_matrix(vocab)
-            
-            original_vector_size = Word2VecConfig.VECTOR_SIZE
-            Word2VecConfig.VECTOR_SIZE = embedding_dim
-            
-            for model_type in models:
-                for freeze_embedding in freezing_options:
-                    experiment_name = f"{dataset_name}_{model_type}_{emb_choice}_Freeze{freeze_embedding}"
+        total_loss = 0.0
+        total_acc = 0.0
+        
+        with torch.set_grad_enabled(is_train):
+            for inputs, labels in dataloader:
+                inputs = inputs.to(self.device)
+                labels = labels.to(self.device)
+                
+                outputs = self.model(inputs)
+                loss = self.criterion(outputs, labels)
+                
+                if is_train:
+                    self.optimizer.zero_grad()
+                    loss.backward()
+                    self.optimizer.step()
                     
-                    print(f"\n{'='*50}")
-                    print(f"Classical Experiment {current_exp}/{total_classical_exp}: {experiment_name}")
-                    print(f"{'='*50}")
-                    
-                    if model_type == 'CNN':
-                        model = TextCNN(vocab.vocab_size, embedding_matrix, freeze_embedding)
-                    else:
-                        model = TextLSTM(vocab.vocab_size, embedding_matrix, freeze_embedding)
-                        
-                    trainer = ModelTrainer(
-                        model=model,
-                        train_loader=train_loader,
-                        val_loader=val_loader,
-                        test_loader=test_loader,
-                        learning_rate=ModelConfig.LEARNING_RATE,
-                        device=device,
-                        experiment_name=experiment_name
-                    )
-                    
-                    # 5 Epochs for CNN and LSTM
-                    trainer.train(num_epochs=5)
-                    current_exp += 1
-            
-            Word2VecConfig.VECTOR_SIZE = original_vector_size
-            
-    # --- PART 2: TRANSFORMER EXPERIMENTS ---
-    print("\n" + "="*50)
-    print(" STARTING TRANSFORMER EXPERIMENTS")
-    print("="*50)
-    
-    for dataset_name in datasets:
-        # 3 epochs is standard for fine-tuning Transformers
-        train_transformer(dataset_name=dataset_name, batch_size=16, num_epochs=3)
-
-    print("\nAll 26 automated experiments (Classical + Transformers) finished successfully!")
-    print("Check the 'results' folder for your CSV files and graphs.")
-
-if __name__ == "__main__":
-    # Ensure torchtext is installed for GloVe
-    try:
-        import torchtext
-    except ImportError:
-        print("Error: 'torchtext' is required for pretrained GloVe embeddings.")
-        print("Please install it using: pip install torchtext")
-        exit(1)
+                total_loss += loss.item() * inputs.size(0)
+                total_acc += self.calculate_accuracy(outputs, labels) * inputs.size(0)
+                
+        epoch_loss = total_loss / len(dataloader.dataset)
+        epoch_acc = total_acc / len(dataloader.dataset)
+        return epoch_loss, epoch_acc
         
-    run_all_experiments()
+    def train(self, num_epochs=5):
+        best_eval_acc = 0.0
+        best_eval_epoch = 0
+        best_test_acc = 0.0
+        best_test_epoch = 0
+        best_induced_test_acc = 0.0
+        
+        # הדפסת הטבלה המדויקת שנדרשה במסמך
+        print(f"{'Epoch':<7} | {'Train Loss':<11} | {'Train Acc':<10} | {'Eval Acc':<9} | {'Test Acc':<9} | {'Epoch Time':<11} | {'Best Induced Test'}")
+        print("-" * 85)
+        
+        for epoch in range(1, num_epochs + 1):
+            start_time = time.time()
+            
+            train_loss, train_acc = self.run_epoch(self.train_loader, is_train=True)
+            _, eval_acc = self.run_epoch(self.val_loader, is_train=False)
+            _, test_acc = self.run_epoch(self.test_loader, is_train=False)
+            
+            epoch_time = time.time() - start_time
+            
+            if test_acc > best_test_acc:
+                best_test_acc = test_acc
+                best_test_epoch = epoch
+                
+            if eval_acc > best_eval_acc:
+                best_eval_acc = eval_acc
+                best_eval_epoch = epoch
+                best_induced_test_acc = test_acc
+                
+            print(f"{epoch:<7} | {train_loss:<11.4f} | {train_acc:<10.4f} | {eval_acc:<9.4f} | {test_acc:<9.4f} | {epoch_time:<9.2f}s | {best_induced_test_acc:.4f}")
+            
+            self.epoch_data.append({
+                "Epoch": epoch,
+                "Train Loss": round(train_loss, 4),
+                "Train Acc": round(train_acc, 4),
+                "Eval Acc": round(eval_acc, 4),
+                "Test Acc": round(test_acc, 4),
+                "Epoch Time (s)": round(epoch_time, 2),
+                "Best Induced Test": round(best_induced_test_acc, 4)
+            })
+            
+        print("-" * 85)
+        print("Training Summary:")
+        print(f"Best eval results:          {best_eval_acc:.4f} (Obtained on Epoch {best_eval_epoch})")
+        print(f"Best test results:          {best_test_acc:.4f} (Obtained on Epoch {best_test_epoch})")
+        print(f"Best induced test results:  {best_induced_test_acc:.4f}")
+        
+        self.save_results_and_graphs(best_eval_acc, best_test_acc, best_induced_test_acc)
+        
+    def save_results_and_graphs(self, best_eval, best_test, best_induced):
+        os.makedirs("results", exist_ok=True)
+        
+        # 1. שמירת המידע המפורט לכל אפוק (לגיבוי ולבדיקות עומק)
+        df_epochs = pd.DataFrame(self.epoch_data)
+        df_epochs.to_csv(f"results/{self.experiment_name}_epochs.csv", index=False)
+        
+        # 2. חילוץ חכם של הפרמטרים מתוך שם הניסוי כדי לבנות עמודות מושלמות למצגת
+        dataset_name = 'rotten_tomatoes' if 'rotten_tomatoes' in self.experiment_name else 'imdb'
+        model = 'CNN' if 'CNN' in self.experiment_name else 'LSTM'
+        emb = 'Word2Vec' if 'Word2Vec' in self.experiment_name else 'GloVe' if 'GloVe' in self.experiment_name else 'Random'
+        freeze = 'True' if 'FreezeTrue' in self.experiment_name else 'False'
+        
+        # חישוב זמן האימון הממוצע לאפוק (דרישה מהמסמך)
+        avg_time = round(df_epochs["Epoch Time (s)"].mean(), 2)
+        
+        # יצירת השורה לטבלת המאסטר לפי הדרישות המדויקות
+        summary_data = [{
+            "Dataset": dataset_name,
+            "Method": model,
+            "Embedding": emb,
+            "Freeze": freeze,
+            "Train Time per Epoch (s)": avg_time,
+            "Accuracy on Val": round(best_eval, 4),
+            "Accuracy on Test": round(best_test, 4),
+            "Best Induced Test": round(best_induced, 4)
+        }]
+        
+        df_summary = pd.DataFrame(summary_data)
+        master_file = "results/presentation_master_results.csv"
+        
+        if os.path.exists(master_file):
+            df_summary.to_csv(master_file, mode='a', header=False, index=False)
+        else:
+            df_summary.to_csv(master_file, index=False)
+            
+        # 3. יצירת גרפים מותאמים למצגת
+        self.generate_graphs()
+        
+    def generate_graphs(self):
+        epochs = [d["Epoch"] for d in self.epoch_data]
+        train_acc = [d["Train Acc"] for d in self.epoch_data]
+        eval_acc = [d["Eval Acc"] for d in self.epoch_data]
+        train_loss = [d["Train Loss"] for d in self.epoch_data]
+        
+        # שימוש בעיצוב יפה וברור למצגות
+        plt.style.use('seaborn-v0_8-darkgrid')
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
+        
+        # כותרת ראשית שמתארת את הניסוי
+        clean_title = self.experiment_name.replace('_', ' | ')
+        fig.suptitle(f"Experiment Progress: {clean_title}", fontsize=14, fontweight='bold')
+        
+        # גרף 1: Accuracy (Train vs Validation)
+        ax1.plot(epochs, train_acc, label='Train Accuracy', marker='o', linewidth=2, color='#1f77b4')
+        ax1.plot(epochs, eval_acc, label='Validation Accuracy', marker='s', linewidth=2, color='#ff7f0e')
+        ax1.set_title('Accuracy over Epochs')
+        ax1.set_xlabel('Epoch')
+        ax1.set_ylabel('Accuracy')
+        ax1.set_xticks(epochs)
+        ax1.legend()
+        
+        # גרף 2: Train Loss
+        ax2.plot(epochs, train_loss, label='Train Loss', marker='x', linewidth=2, color='#d62728')
+        ax2.set_title('Loss over Epochs')
+        ax2.set_xlabel('Epoch')
+        ax2.set_ylabel('CrossEntropy Loss')
+        ax2.set_xticks(epochs)
+        ax2.legend()
+        
+        plt.tight_layout()
+        # שמירה ברזולוציה גבוהה (dpi=300) כדי שלא יטשטש במצגת
+        plt.savefig(f"results/{self.experiment_name}_graph.png", dpi=300)
+        plt.close()
