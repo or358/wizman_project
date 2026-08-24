@@ -8,7 +8,8 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from torch.utils.data import DataLoader, Dataset
 from datasets import load_dataset
-from transformers import DistilBertTokenizer, DistilBertForSequenceClassification, AdamW
+from transformers import DistilBertTokenizer, DistilBertForSequenceClassification
+from torch.optim import AdamW
 
 class TransformerDataset(Dataset):
     def __init__(self, texts, labels, tokenizer, max_length=256):
