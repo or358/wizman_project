@@ -13,6 +13,7 @@ from preprocessor import TextPreprocessor
 from data_loader import Vocabulary, TextDataset
 from models import TextCNN, TextLSTM
 from trainer import ModelTrainer
+from transformer_main import train_transformer  # Importing the transformer runner
 
 def load_pretrained_glove(vocab: Vocabulary):
     """
@@ -34,7 +35,7 @@ def load_pretrained_glove(vocab: Vocabulary):
             words_found += 1
             
     print(f"Loaded {words_found}/{vocab.vocab_size} pretrained GloVe vectors.")
-    return embedding_matrix, 300 # Return matrix and the dimension size
+    return embedding_matrix, 300
 
 def create_our_w2v_matrix(vocab: Vocabulary, w2v_path: str = "../data/my_word2vec.model"):
     """
@@ -43,7 +44,7 @@ def create_our_w2v_matrix(vocab: Vocabulary, w2v_path: str = "../data/my_word2ve
     if not os.path.exists(w2v_path):
         raise FileNotFoundError(f"Cannot find Word2Vec model at {w2v_path}. Did you run train_word2vec.py?")
         
-    print(f"\nLoading our custom trained Word2Vec model from {w2v_path}...")
+    print(f"\nLoading custom trained Word2Vec model from {w2v_path}...")
     w2v_model = Word2Vec.load(w2v_path)
     
     embedding_matrix = torch.zeros((vocab.vocab_size, Word2VecConfig.VECTOR_SIZE))
@@ -53,15 +54,16 @@ def create_our_w2v_matrix(vocab: Vocabulary, w2v_path: str = "../data/my_word2ve
     words_found = 0
     for word, idx in vocab.word2idx.items():
         if word in w2v_model.wv:
-            embedding_matrix[idx] = torch.tensor(w2v_model.wv[word])
+            # .copy() is needed to safely convert from NumPy array to PyTorch tensor
+            embedding_matrix[idx] = torch.tensor(w2v_model.wv[word].copy())
             words_found += 1
             
-    print(f"Loaded {words_found}/{vocab.vocab_size} vectors from our custom Word2Vec.")
+    print(f"Loaded {words_found}/{vocab.vocab_size} vectors from custom Word2Vec.")
     return embedding_matrix, Word2VecConfig.VECTOR_SIZE
 
 def prepare_data_for_dataset(dataset_name: str, preprocessor: TextPreprocessor):
     """Loads dataset, builds vocabulary, and returns DataLoaders."""
-    print(f"\nLoading and preparing dataset: {dataset_name.upper()}...")
+    print(f"\nLoading dataset: {dataset_name.upper()}...")
     
     if dataset_name == 'rotten_tomatoes':
         dataset = load_dataset("cornell-movie-review-data/rotten_tomatoes")
@@ -78,7 +80,6 @@ def prepare_data_for_dataset(dataset_name: str, preprocessor: TextPreprocessor):
     
     print("Tokenizing training set to build vocabulary...")
     tokenized_train = [preprocessor.tokenize(text) for text in train_texts]
-    
     vocab = Vocabulary()
     vocab.build_vocab(tokenized_train, min_count=2)
     print(f"Vocabulary size created: {vocab.vocab_size}")
@@ -93,99 +94,77 @@ def prepare_data_for_dataset(dataset_name: str, preprocessor: TextPreprocessor):
     
     return vocab, train_loader, val_loader, test_loader
 
-def run_interactive_experiment():
-    """Runs an interactive CLI to configure and launch an experiment."""
-    print("="*60)
-    print(" DEEP LEARNING CLASSIFICATION - INTERACTIVE EXPERIMENT")
-    print("="*60)
+def run_all_experiments():
+    """Runs all 24 classical combinations + 2 Transformer experiments automatically."""
+    datasets = ['rotten_tomatoes', 'imdb']
+    models = ['CNN', 'LSTM']
+    embeddings = ['Random', 'GloVe', 'Word2Vec']
+    freezing_options = [True, False]
     
-    # 1. Choose Dataset
-    while True:
-        ds_choice = input("Select Dataset (1 for IMDb, 2 for Rotten Tomatoes): ").strip()
-        if ds_choice in ['1', '2']:
-            break
-    dataset_name = 'imdb' if ds_choice == '1' else 'rotten_tomatoes'
-    
-    # 2. Choose Architecture
-    while True:
-        model_choice = input("Select Model Architecture (1 for CNN, 2 for LSTM): ").strip()
-        if model_choice in ['1', '2']:
-            break
-    model_type = 'CNN' if model_choice == '1' else 'LSTM'
-    
-    # 3. Choose Embedding Method
-    print("\nEmbedding Methods:")
-    print("1. Random Generation")
-    print("2. Pretrained Models (GloVe)")
-    print("3. Our Trained Word2Vec")
-    while True:
-        emb_choice = input("Select Embedding Method (1, 2, or 3): ").strip()
-        if emb_choice in ['1', '2', '3']:
-            break
-            
-    # 4. Choose Freezing Option
-    while True:
-        freeze_choice = input("Freeze embeddings during training? (y/n): ").strip().lower()
-        if freeze_choice in ['y', 'n']:
-            break
-    freeze_embedding = (freeze_choice == 'y')
-    
-    print("\n" + "-"*40)
-    print("EXPERIMENT CONFIGURATION SUMMARY:")
-    print(f"Dataset:       {dataset_name.upper()}")
-    print(f"Model:         {model_type}")
-    print(f"Embedding:     {'Random' if emb_choice=='1' else 'GloVe Pretrained' if emb_choice=='2' else 'Custom Word2Vec'}")
-    print(f"Freeze Emb:    {freeze_embedding}")
-    print("-"*40)
-    
-    # Start actual execution
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    print(f"Initializing process on device: {device}")
+    print(f"Starting fully automated run on device: {device}")
     
     preprocessor = TextPreprocessor()
-    vocab, train_loader, val_loader, test_loader = prepare_data_for_dataset(dataset_name, preprocessor)
     
-    # Prepare embeddings based on choice
-    embedding_matrix = None
-    embedding_dim = Word2VecConfig.VECTOR_SIZE # Default
-    
-    if emb_choice == '1':
-        print("\nUsing Randomly Generated Embeddings.")
-        embedding_matrix = None # Handled inside the model creation
+    total_classical_exp = len(datasets) * len(models) * len(embeddings) * len(freezing_options)
+    current_exp = 1
+
+    # --- PART 1: CNN & LSTM EXPERIMENTS ---
+    for dataset_name in datasets:
+        vocab, train_loader, val_loader, test_loader = prepare_data_for_dataset(dataset_name, preprocessor)
         
-    elif emb_choice == '2':
-        embedding_matrix, embedding_dim = load_pretrained_glove(vocab)
-        
-    elif emb_choice == '3':
-        embedding_matrix, embedding_dim = create_our_w2v_matrix(vocab)
+        for emb_choice in embeddings:
+            embedding_matrix = None
+            embedding_dim = Word2VecConfig.VECTOR_SIZE
+            
+            if emb_choice == 'GloVe':
+                embedding_matrix, embedding_dim = load_pretrained_glove(vocab)
+            elif emb_choice == 'Word2Vec':
+                embedding_matrix, embedding_dim = create_our_w2v_matrix(vocab)
+            
+            original_vector_size = Word2VecConfig.VECTOR_SIZE
+            Word2VecConfig.VECTOR_SIZE = embedding_dim
+            
+            for model_type in models:
+                for freeze_embedding in freezing_options:
+                    experiment_name = f"{dataset_name}_{model_type}_{emb_choice}_Freeze{freeze_embedding}"
+                    
+                    print(f"\n{'='*50}")
+                    print(f"Classical Experiment {current_exp}/{total_classical_exp}: {experiment_name}")
+                    print(f"{'='*50}")
+                    
+                    if model_type == 'CNN':
+                        model = TextCNN(vocab.vocab_size, embedding_matrix, freeze_embedding)
+                    else:
+                        model = TextLSTM(vocab.vocab_size, embedding_matrix, freeze_embedding)
+                        
+                    trainer = ModelTrainer(
+                        model=model,
+                        train_loader=train_loader,
+                        val_loader=val_loader,
+                        test_loader=test_loader,
+                        learning_rate=ModelConfig.LEARNING_RATE,
+                        device=device,
+                        experiment_name=experiment_name
+                    )
+                    
+                    # 5 Epochs for CNN and LSTM
+                    trainer.train(num_epochs=5)
+                    current_exp += 1
+            
+            Word2VecConfig.VECTOR_SIZE = original_vector_size
+            
+    # --- PART 2: TRANSFORMER EXPERIMENTS ---
+    print("\n" + "="*50)
+    print(" STARTING TRANSFORMER EXPERIMENTS")
+    print("="*50)
     
-    # We need to temporarily update Word2VecConfig so the model knows the right dimension (e.g. GloVe is 300)
-    original_vector_size = Word2VecConfig.VECTOR_SIZE
-    Word2VecConfig.VECTOR_SIZE = embedding_dim
-    
-    print(f"\nBuilding {model_type} Model...")
-    if model_type == 'CNN':
-        model = TextCNN(vocab.vocab_size, embedding_matrix, freeze_embedding)
-    else:
-        model = TextLSTM(vocab.vocab_size, embedding_matrix, freeze_embedding)
-        
-    # Revert config to original just in case
-    Word2VecConfig.VECTOR_SIZE = original_vector_size
-        
-    trainer = ModelTrainer(
-        model=model,
-        train_loader=train_loader,
-        val_loader=val_loader,
-        test_loader=test_loader,
-        learning_rate=ModelConfig.LEARNING_RATE,
-        device=device,
-        experiment_name=f"{dataset_name}_{model_type}_Freeze{freeze_embedding}" 
-    )
-    
-    # Run training for 5 epochs (you can adjust this)
-    trainer.train(num_epochs=5)
-    
-    print("\nExperiment finished. You can run the script again to test another configuration.")
+    for dataset_name in datasets:
+        # 3 epochs is standard for fine-tuning Transformers
+        train_transformer(dataset_name=dataset_name, batch_size=16, num_epochs=3)
+
+    print("\nAll 26 automated experiments (Classical + Transformers) finished successfully!")
+    print("Check the 'results' folder for your CSV files and graphs.")
 
 if __name__ == "__main__":
     # Ensure torchtext is installed for GloVe
@@ -196,4 +175,4 @@ if __name__ == "__main__":
         print("Please install it using: pip install torchtext")
         exit(1)
         
-    run_interactive_experiment()
+    run_all_experiments()

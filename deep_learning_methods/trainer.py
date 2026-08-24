@@ -1,169 +1,178 @@
-# deep_learning_methods/trainer.py
+# deep_learning_methods/main.py
 
-import time
 import os
 import torch
 import torch.nn as nn
-import pandas as pd
-import matplotlib.pyplot as plt
 from torch.utils.data import DataLoader
+from datasets import load_dataset
+from gensim.models import Word2Vec
+import torchtext.vocab as vocab_lib
 
-class ModelTrainer:
-    def __init__(self, model: nn.Module, train_loader: DataLoader, val_loader: DataLoader, 
-                 test_loader: DataLoader, learning_rate: float, device: str = 'cpu',
-                 experiment_name: str = "experiment"):
-        self.model = model.to(device)
-        self.train_loader = train_loader
-        self.val_loader = val_loader
-        self.test_loader = test_loader
-        self.device = device
-        self.experiment_name = experiment_name
-        
-        self.criterion = nn.CrossEntropyLoss()
-        self.optimizer = torch.optim.Adam(self.model.parameters(), lr=learning_rate)
-        
-        self.best_eval_acc = 0.0
-        self.best_eval_epoch = 0
-        self.best_test_acc = 0.0
-        self.best_test_epoch = 0
-        self.best_induced_test_acc = 0.0
-        
-        self.epoch_results_data = []
+from config import ModelConfig, Word2VecConfig
+from preprocessor import TextPreprocessor
+from data_loader import Vocabulary, TextDataset
+from models import TextCNN, TextLSTM
+from trainer import ModelTrainer
+from transformer_main import train_transformer  # Importing the transformer runner
 
-    def calculate_accuracy(self, outputs, labels):
-        _, preds = torch.max(outputs, 1)
-        corrects = torch.sum(preds == labels).item()
-        return corrects / len(labels)
-
-    def _run_epoch(self, dataloader, is_train: bool):
-        if is_train:
-            self.model.train()
-        else:
-            self.model.eval()
+def load_pretrained_glove(vocab: Vocabulary):
+    """
+    Loads pretrained GloVe embeddings for the words in our vocabulary.
+    Returns an embedding matrix matching our vocabulary size.
+    """
+    print("\nDownloading/Loading GloVe pretrained vectors (this might take a minute the first time)...")
+    # Using GloVe 6B tokens, 300 dimensions as a standard pretrained model
+    glove = vocab_lib.GloVe(name='6B', dim=300)
+    
+    embedding_matrix = torch.zeros((vocab.vocab_size, 300))
+    nn.init.uniform_(embedding_matrix, -0.1, 0.1)
+    embedding_matrix[vocab.word2idx[ModelConfig.PAD_TOKEN]] = torch.zeros(300)
+    
+    words_found = 0
+    for word, idx in vocab.word2idx.items():
+        if word in glove.stoi:
+            embedding_matrix[idx] = glove.vectors[glove.stoi[word]]
+            words_found += 1
             
-        total_loss = 0.0
-        total_acc = 0.0
+    print(f"Loaded {words_found}/{vocab.vocab_size} pretrained GloVe vectors.")
+    return embedding_matrix, 300
+
+def create_our_w2v_matrix(vocab: Vocabulary, w2v_path: str = "../data/my_word2vec.model"):
+    """
+    Loads our custom trained Word2Vec model.
+    """
+    if not os.path.exists(w2v_path):
+        raise FileNotFoundError(f"Cannot find Word2Vec model at {w2v_path}. Did you run train_word2vec.py?")
         
-        with torch.set_grad_enabled(is_train):
-            for inputs, labels in dataloader:
-                inputs = inputs.to(self.device)
-                labels = labels.to(self.device).long() 
-                
-                outputs = self.model(inputs)
-                loss = self.criterion(outputs, labels)
-                
-                if is_train:
-                    self.optimizer.zero_grad()
-                    loss.backward()
-                    self.optimizer.step()
+    print(f"\nLoading custom trained Word2Vec model from {w2v_path}...")
+    w2v_model = Word2Vec.load(w2v_path)
+    
+    embedding_matrix = torch.zeros((vocab.vocab_size, Word2VecConfig.VECTOR_SIZE))
+    nn.init.uniform_(embedding_matrix, -0.1, 0.1)
+    embedding_matrix[vocab.word2idx[ModelConfig.PAD_TOKEN]] = torch.zeros(Word2VecConfig.VECTOR_SIZE)
+    
+    words_found = 0
+    for word, idx in vocab.word2idx.items():
+        if word in w2v_model.wv:
+            # .copy() is needed to safely convert from NumPy array to PyTorch tensor
+            embedding_matrix[idx] = torch.tensor(w2v_model.wv[word].copy())
+            words_found += 1
+            
+    print(f"Loaded {words_found}/{vocab.vocab_size} vectors from custom Word2Vec.")
+    return embedding_matrix, Word2VecConfig.VECTOR_SIZE
+
+def prepare_data_for_dataset(dataset_name: str, preprocessor: TextPreprocessor):
+    """Loads dataset, builds vocabulary, and returns DataLoaders."""
+    print(f"\nLoading dataset: {dataset_name.upper()}...")
+    
+    if dataset_name == 'rotten_tomatoes':
+        dataset = load_dataset("cornell-movie-review-data/rotten_tomatoes")
+        train_texts, train_labels = dataset['train']['text'], dataset['train']['label']
+        val_texts, val_labels = dataset['validation']['text'], dataset['validation']['label']
+        test_texts, test_labels = dataset['test']['text'], dataset['test']['label']
+        
+    elif dataset_name == 'imdb':
+        dataset = load_dataset("stanfordnlp/imdb")
+        full_train = dataset['train'].train_test_split(test_size=0.2, seed=42)
+        train_texts, train_labels = full_train['train']['text'], full_train['train']['label']
+        val_texts, val_labels = full_train['test']['text'], full_train['test']['label']
+        test_texts, test_labels = dataset['test']['text'], dataset['test']['label']
+    
+    print("Tokenizing training set to build vocabulary...")
+    tokenized_train = [preprocessor.tokenize(text) for text in train_texts]
+    vocab = Vocabulary()
+    vocab.build_vocab(tokenized_train, min_count=2)
+    print(f"Vocabulary size created: {vocab.vocab_size}")
+    
+    train_dataset = TextDataset(train_texts, train_labels, vocab, preprocessor)
+    val_dataset = TextDataset(val_texts, val_labels, vocab, preprocessor)
+    test_dataset = TextDataset(test_texts, test_labels, vocab, preprocessor)
+    
+    train_loader = DataLoader(train_dataset, batch_size=ModelConfig.BATCH_SIZE, shuffle=True)
+    val_loader = DataLoader(val_dataset, batch_size=ModelConfig.BATCH_SIZE, shuffle=False)
+    test_loader = DataLoader(test_dataset, batch_size=ModelConfig.BATCH_SIZE, shuffle=False)
+    
+    return vocab, train_loader, val_loader, test_loader
+
+def run_all_experiments():
+    """Runs all 24 classical combinations + 2 Transformer experiments automatically."""
+    datasets = ['rotten_tomatoes', 'imdb']
+    models = ['CNN', 'LSTM']
+    embeddings = ['Random', 'GloVe', 'Word2Vec']
+    freezing_options = [True, False]
+    
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    print(f"Starting fully automated run on device: {device}")
+    
+    preprocessor = TextPreprocessor()
+    
+    total_classical_exp = len(datasets) * len(models) * len(embeddings) * len(freezing_options)
+    current_exp = 1
+
+    # --- PART 1: CNN & LSTM EXPERIMENTS ---
+    for dataset_name in datasets:
+        vocab, train_loader, val_loader, test_loader = prepare_data_for_dataset(dataset_name, preprocessor)
+        
+        for emb_choice in embeddings:
+            embedding_matrix = None
+            embedding_dim = Word2VecConfig.VECTOR_SIZE
+            
+            if emb_choice == 'GloVe':
+                embedding_matrix, embedding_dim = load_pretrained_glove(vocab)
+            elif emb_choice == 'Word2Vec':
+                embedding_matrix, embedding_dim = create_our_w2v_matrix(vocab)
+            
+            original_vector_size = Word2VecConfig.VECTOR_SIZE
+            Word2VecConfig.VECTOR_SIZE = embedding_dim
+            
+            for model_type in models:
+                for freeze_embedding in freezing_options:
+                    experiment_name = f"{dataset_name}_{model_type}_{emb_choice}_Freeze{freeze_embedding}"
                     
-                total_loss += loss.item() * inputs.size(0)
-                total_acc += self.calculate_accuracy(outputs, labels) * inputs.size(0)
-                
-        epoch_loss = total_loss / len(dataloader.dataset)
-        epoch_acc = total_acc / len(dataloader.dataset)
-        return epoch_loss, epoch_acc
-
-    def save_results_to_csv(self):
-        os.makedirs("results", exist_ok=True)
-        
-        df_epochs = pd.DataFrame(self.epoch_results_data)
-        epochs_filename = f"results/{self.experiment_name}_epochs.csv"
-        df_epochs.to_csv(epochs_filename, index=False)
-        
-        summary_data = [{
-            "Experiment": self.experiment_name,
-            "Best Eval Acc": self.best_eval_acc,
-            "Best Eval Epoch": self.best_eval_epoch,
-            "Best Test Acc": self.best_test_acc,
-            "Best Test Epoch": self.best_test_epoch,
-            "Best Induced Test Acc": self.best_induced_test_acc
-        }]
-        df_summary = pd.DataFrame(summary_data)
-        
-        master_summary_file = "results/master_summary_results.csv"
-        if os.path.exists(master_summary_file):
-            df_summary.to_csv(master_summary_file, mode='a', header=False, index=False)
-        else:
-            df_summary.to_csv(master_summary_file, index=False)
-
-    def save_graphs(self):
-        """Generates and saves Training curves (Accuracy and Loss) as an image."""
-        os.makedirs("results", exist_ok=True)
-        
-        epochs = [d["Epoch"] for d in self.epoch_results_data]
-        train_acc = [d["Train Acc"] for d in self.epoch_results_data]
-        eval_acc = [d["Eval Acc"] for d in self.epoch_results_data]
-        train_loss = [d["Train Loss"] for d in self.epoch_results_data]
-        
-        plt.figure(figsize=(12, 5))
-        
-        # Plot 1: Accuracy
-        plt.subplot(1, 2, 1)
-        plt.plot(epochs, train_acc, label='Train Accuracy', marker='o')
-        plt.plot(epochs, eval_acc, label='Eval Accuracy', marker='o')
-        plt.title(f'Accuracy: {self.experiment_name}')
-        plt.xlabel('Epochs')
-        plt.ylabel('Accuracy')
-        plt.legend()
-        plt.grid(True)
-        
-        # Plot 2: Loss
-        plt.subplot(1, 2, 2)
-        plt.plot(epochs, train_loss, label='Train Loss', color='red', marker='o')
-        plt.title(f'Loss: {self.experiment_name}')
-        plt.xlabel('Epochs')
-        plt.ylabel('Loss')
-        plt.legend()
-        plt.grid(True)
-        
-        # Save figure
-        graph_filename = f"results/{self.experiment_name}_graph.png"
-        plt.tight_layout()
-        plt.savefig(graph_filename)
-        plt.close() # Close to free up memory
-
-    def train(self, num_epochs: int):
-        print("\nStarting Training...")
-        print(f"{'Epoch':<7} | {'Train Loss':<11} | {'Train Acc':<10} | {'Eval Acc':<9} | {'Test Acc':<9} | {'Epoch Time':<11} | {'Best Induced Test'}")
-        print("-" * 85)
-        
-        for epoch in range(1, num_epochs + 1):
-            start_time = time.time()
+                    print(f"\n{'='*50}")
+                    print(f"Classical Experiment {current_exp}/{total_classical_exp}: {experiment_name}")
+                    print(f"{'='*50}")
+                    
+                    if model_type == 'CNN':
+                        model = TextCNN(vocab.vocab_size, embedding_matrix, freeze_embedding)
+                    else:
+                        model = TextLSTM(vocab.vocab_size, embedding_matrix, freeze_embedding)
+                        
+                    trainer = ModelTrainer(
+                        model=model,
+                        train_loader=train_loader,
+                        val_loader=val_loader,
+                        test_loader=test_loader,
+                        learning_rate=ModelConfig.LEARNING_RATE,
+                        device=device,
+                        experiment_name=experiment_name
+                    )
+                    
+                    # 5 Epochs for CNN and LSTM
+                    trainer.train(num_epochs=5)
+                    current_exp += 1
             
-            train_loss, train_acc = self._run_epoch(self.train_loader, is_train=True)
-            _, eval_acc = self._run_epoch(self.val_loader, is_train=False)
-            _, test_acc = self._run_epoch(self.test_loader, is_train=False)
+            Word2VecConfig.VECTOR_SIZE = original_vector_size
             
-            epoch_time = time.time() - start_time
-            
-            if test_acc > self.best_test_acc:
-                self.best_test_acc = test_acc
-                self.best_test_epoch = epoch
-                
-            if eval_acc > self.best_eval_acc:
-                self.best_eval_acc = eval_acc
-                self.best_eval_epoch = epoch
-                self.best_induced_test_acc = test_acc 
-                
-            print(f"{epoch:<7} | {train_loss:<11.4f} | {train_acc:<10.4f} | {eval_acc:<9.4f} | {test_acc:<9.4f} | {epoch_time:<9.2f}s | {self.best_induced_test_acc:.4f}")
-            
-            self.epoch_results_data.append({
-                "Epoch": epoch,
-                "Train Loss": round(train_loss, 4),
-                "Train Acc": round(train_acc, 4),
-                "Eval Acc": round(eval_acc, 4),
-                "Test Acc": round(test_acc, 4),
-                "Epoch Time (s)": round(epoch_time, 2),
-                "Best Induced Test": round(self.best_induced_test_acc, 4)
-            })
+    # --- PART 2: TRANSFORMER EXPERIMENTS ---
+    print("\n" + "="*50)
+    print(" STARTING TRANSFORMER EXPERIMENTS")
+    print("="*50)
+    
+    for dataset_name in datasets:
+        # 3 epochs is standard for fine-tuning Transformers
+        train_transformer(dataset_name=dataset_name, batch_size=16, num_epochs=3)
 
-        print("-" * 85)
-        print("Training Summary:")
-        print(f"Best eval results:          {self.best_eval_acc:.4f} (Obtained on Epoch {self.best_eval_epoch})")
-        print(f"Best test results:          {self.best_test_acc:.4f} (Obtained on Epoch {self.best_test_epoch})")
-        print(f"Best induced test results:  {self.best_induced_test_acc:.4f}")
+    print("\nAll 26 automated experiments (Classical + Transformers) finished successfully!")
+    print("Check the 'results' folder for your CSV files and graphs.")
+
+if __name__ == "__main__":
+    # Ensure torchtext is installed for GloVe
+    try:
+        import torchtext
+    except ImportError:
+        print("Error: 'torchtext' is required for pretrained GloVe embeddings.")
+        print("Please install it using: pip install torchtext")
+        exit(1)
         
-        # Save CSVs and Graphs
-        self.save_results_to_csv()
-        self.save_graphs()
+    run_all_experiments()
