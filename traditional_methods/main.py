@@ -1,3 +1,5 @@
+import os
+import pandas as pd
 from data_loader import load_data
 from preprocessor import preprocess_and_split
 import models
@@ -41,7 +43,11 @@ def main():
         accuracies[name] = accuracy
         runtimes[name]['pred'] = pred_time
 
-    # Results Table matching the internship requirements
+    print("\n[Step 5: Generating Visualizations and Saving Results]")
+   
+    output_dir = "traditional_results"
+    os.makedirs(output_dir, exist_ok=True)
+    
     print("\n" + "="*85)
     print(f"RESULTS TABLE: {config.DATASET_NAME.upper()}")
     print("="*85)
@@ -54,14 +60,30 @@ def main():
         "Decision Tree": f"TF-IDF ({config.MAX_FEATURES}), max_depth={config.DT_MAX_DEPTH}"
     }
     
+    results_data = []
+    
     for name in trained_models.keys():
-        t_train = f"{runtimes[name]['train']:.4f}s"
-        acc_str = f"{(accuracies[name] * 100):.2f}%"
-        print(f"{name:<20} | {params_map[name]:<25} | {t_train:<15} | {acc_str:<15}")
+        t_train_raw = runtimes[name]['train']
+        acc_raw = accuracies[name]
+        
+        t_train_str = f"{t_train_raw:.4f}s"
+        acc_str = f"{(acc_raw * 100):.2f}%"
+        print(f"{name:<20} | {params_map[name]:<25} | {t_train_str:<15} | {acc_str:<15}")
+        
+        results_data.append({
+            "Method": name,
+            "Main Parameters": params_map[name],
+            "Train Time (s)": round(t_train_raw, 4),
+            "Test Accuracy": round(acc_raw, 4)
+        })
     print("="*85)
 
-    print("\n[Step 5: Generating Visualizations]")
-    plot_confusion_matrices(predictions, runtimes, y_test)
+    df_results = pd.DataFrame(results_data)
+    csv_path = os.path.join(output_dir, "traditional_summary_results.csv")
+    df_results.to_csv(csv_path, index=False)
+    print(f"\nResults successfully saved to '{csv_path}'.")
+
+    plot_confusion_matrices(predictions, runtimes, y_test, output_dir)
     
     print("\n=== Project Execution Completed Successfully ===")
 

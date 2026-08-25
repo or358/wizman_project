@@ -33,7 +33,7 @@ def load_all_sentences_to_ram(data_loader, preprocessor):
     print(f"Successfully loaded {len(all_sentences):,} sentences into memory.")
     return all_sentences
 
-def train_and_save_word2vec(output_model_path: str = "../data/my_word2vec.model"):
+def train_and_save_word2vec(output_model_path: str = "/data/my_word2vec.model"):
     """
     Trains a Gensim Word2Vec model using an in-memory approach for maximum speed.
     """

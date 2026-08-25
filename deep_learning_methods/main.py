@@ -37,7 +37,7 @@ def load_pretrained_glove(vocab: Vocabulary):
     print(f"Loaded {words_found}/{vocab.vocab_size} pretrained GloVe vectors.")
     return embedding_matrix, 300
 
-def create_our_w2v_matrix(vocab: Vocabulary, w2v_path: str = "../data/my_word2vec.model"):
+def create_our_w2v_matrix(vocab: Vocabulary, w2v_path: str = "/data/my_word2vec.model"):
     """
     Loads our custom trained Word2Vec model.
     """

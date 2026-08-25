@@ -1,4 +1,5 @@
 import time
+import os
 import matplotlib
 matplotlib.use('Agg') # Disables interactive GUI to prevent Tkinter crashes
 import matplotlib.pyplot as plt
@@ -25,9 +26,9 @@ def evaluate_model(model, X_test, y_test, model_name):
     
     return y_pred, accuracy, pred_time
 
-def plot_confusion_matrices(results, runtimes, y_test):
+def plot_confusion_matrices(results, runtimes, y_test, output_dir="."):
     """
-    Plots confusion matrices for all models side by side and saves to file.
+    Plots confusion matrices for all models side by side and saves to file in the specified directory.
     """
     fig, axes = plt.subplots(1, 3, figsize=(18, 5))
     fig.suptitle('Confusion Matrices Comparison (Traditional Methods)', fontsize=16)
@@ -43,5 +44,8 @@ def plot_confusion_matrices(results, runtimes, y_test):
         axes[idx].set_title(f"{model_name}\nTrain: {t_train:.3f}s | Pred: {t_pred:.3f}s")
     
     plt.tight_layout()
-    plt.savefig('traditional_confusion_matrices.png')
-    print("\nConfusion matrices saved as 'traditional_confusion_matrices.png'.")
+    
+    # שמירה לתיקייה שהוגדרה
+    save_path = os.path.join(output_dir, 'traditional_confusion_matrices.png')
+    plt.savefig(save_path)
+    print(f"Confusion matrices saved as '{save_path}'.")
