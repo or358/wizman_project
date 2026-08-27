@@ -42,7 +42,7 @@ This project provides a comprehensive comparison of various machine learning and
 ## Usage
 
 ### 1. Traditional Methods
-To run the traditional machine learning experiments (Logistic Regression, Linear SVM, Decision Tree) on the default dataset:
+To run the traditional machine learning experiments (Logistic Regression, Linear SVM, Decision Tree) on the default dataset (You can choose between IMDB and Rotten Tomatoes):
 ```bash
 python traditional_methods/main.py
 ```
