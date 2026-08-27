@@ -5,7 +5,7 @@ Centralizes all hyperparameters and global settings.
 
 # Data Settings
 # Switch between "stanfordnlp/imdb" and "cornell-movie-review-data/rotten_tomatoes" as needed
-DATASET_NAME = "cornell-movie-review-data/rotten_tomatoes"
+DATASET_NAME = "stanfordnlp/imdb"
 TEST_SIZE = 0.2
 RANDOM_STATE = 42
 
