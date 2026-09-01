@@ -1,0 +1,4 @@
+Method,Main Parameters,Train Time (s),Test Accuracy
+Logistic Regression,"TF-IDF (5000), C=1.0",0.5365,0.8935
+Linear SVM,"TF-IDF (5000), C=1.0",1.2138,0.8878
+Decision Tree,"TF-IDF (5000), max_depth=20",20.7036,0.7395
